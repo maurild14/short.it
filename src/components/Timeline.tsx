@@ -1,4 +1,4 @@
-import { useState, type PointerEvent } from "react";
+import { useRef, useState, type PointerEvent } from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -59,6 +59,8 @@ export default function Timeline({
   onSplit: () => void;
 }) {
   const [zoom, setZoom] = useState(1);
+  const ruler = useRef<HTMLDivElement>(null);
+  const press = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const [drag, setDrag] = useState<Record<string, Partial<VideoLayer>>>({});
   const pointerGesture = usePointerGesture();
   const { start: marqueeStart, marquee } = useMarquee(
@@ -67,6 +69,29 @@ export default function Timeline({
     disabled,
   );
   const pixels = 44 * zoom;
+  function seekAt(clientX: number) {
+    if (disabled || !ruler.current) return;
+    onSeek(
+      Math.max(
+        0,
+        Math.min(
+          document.duration - 1 / document.fps,
+          (clientX - ruler.current.getBoundingClientRect().left) / pixels,
+        ),
+      ),
+    );
+  }
+  function scrub(event: PointerEvent<HTMLElement>) {
+    if (disabled || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    seekAt(event.clientX);
+    pointerGesture(
+      (e) => seekAt(e.clientX),
+      () => {},
+    );
+  }
   const timelineWidth = Math.max(640, document.duration * pixels + 80);
   const tracks = [...new Set(document.layers.map((layer) => layer.track))].sort(
     (a, b) => b - a,
@@ -238,29 +263,9 @@ export default function Timeline({
             <div className="track-label ruler-label">Layers</div>
             <div
               className="ruler"
+              ref={ruler}
               style={{ width: timelineWidth }}
-              onPointerDown={(event) => {
-                const target = event.currentTarget;
-                const seek = (e: globalThis.PointerEvent | PointerEvent) =>
-                  onSeek(
-                    Math.max(
-                      0,
-                      Math.min(
-                        document.duration - 1 / document.fps,
-                        (e.clientX - target.getBoundingClientRect().left) /
-                          pixels,
-                      ),
-                    ),
-                  );
-                seek(event);
-                const move = (e: globalThis.PointerEvent) => seek(e);
-                const up = () => {
-                  window.removeEventListener("pointermove", move);
-                  window.removeEventListener("pointerup", up);
-                };
-                window.addEventListener("pointermove", move);
-                window.addEventListener("pointerup", up, { once: true });
-              }}
+              onPointerDown={scrub}
             >
               {Array.from(
                 {
@@ -279,7 +284,47 @@ export default function Timeline({
               )}
             </div>
           </div>
-          <div className="timeline-tracks" onPointerDown={marqueeStart}>
+          <div
+            className="timeline-tracks"
+            onPointerDown={marqueeStart}
+            onPointerDownCapture={(event) => {
+              press.current =
+                event.button === 0
+                  ? { x: event.clientX, y: event.clientY, moved: false }
+                  : null;
+            }}
+            onPointerMoveCapture={(event) => {
+              if (
+                press.current &&
+                Math.hypot(
+                  event.clientX - press.current.x,
+                  event.clientY - press.current.y,
+                ) > 3
+              )
+                press.current.moved = true;
+            }}
+            onPointerCancel={() => {
+              press.current = null;
+            }}
+            onPointerUpCapture={(event) => {
+              const start = press.current;
+              press.current = null;
+              if (
+                !start ||
+                start.moved ||
+                Math.hypot(event.clientX - start.x, event.clientY - start.y) >
+                  3 ||
+                (event.target as HTMLElement).closest(
+                  "button,.track-label,.trim-handle",
+                ) ||
+                event.shiftKey ||
+                event.ctrlKey ||
+                event.metaKey
+              )
+                return;
+              seekAt(event.clientX);
+            }}
+          >
             {!tracks.length && (
               <div className="timeline-empty">
                 <div className="track-label">Your timeline</div>
@@ -369,7 +414,43 @@ export default function Timeline({
             })}
           </div>
           <div className="playhead" style={{ left: 148 + time * pixels }}>
-            <span />
+            <button
+              type="button"
+              className="playhead-handle"
+              aria-label="Playback position"
+              role="slider"
+              aria-valuemin={0}
+              aria-valuemax={document.duration - 1 / document.fps}
+              aria-valuenow={time}
+              aria-valuetext={formatTime(time)}
+              disabled={disabled}
+              onPointerDown={scrub}
+              onKeyDown={(event) => {
+                if (
+                  !["ArrowLeft", "ArrowRight", "Home", "End"].includes(
+                    event.key,
+                  )
+                )
+                  return;
+                event.preventDefault();
+                event.stopPropagation();
+                const next =
+                  event.key === "Home"
+                    ? 0
+                    : event.key === "End"
+                      ? document.duration - 1 / document.fps
+                      : time +
+                        ((event.key === "ArrowLeft" ? -1 : 1) *
+                          (event.shiftKey ? 10 : 1)) /
+                          document.fps;
+                onSeek(
+                  Math.max(
+                    0,
+                    Math.min(document.duration - 1 / document.fps, next),
+                  ),
+                );
+              }}
+            />
           </div>
         </div>
       </div>

@@ -1,0 +1,16 @@
+node_modules/
+dist/
+projects/
+.short-it/
+.env
+.env.*
+!.env.example
+*.log
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+coverage/
+test-results/
+playwright-report/
+.claude/
+.codex/

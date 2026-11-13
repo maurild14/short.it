@@ -10,6 +10,17 @@ The resulting short.it workspace keeps the same familiar spatial responsibilitie
 
 No CapCut code, assets, logos, or screenshots are redistributed. These are workflow references, not claims of compatibility with CapCut project files.
 
+### Direct editing interactions
+
+The official [PC and Mac editing guide](https://www.capcut.com/resource/how-to-use-capcut-on-pc) was also reviewed for selection, timeline tools, and the division between media, preview, and properties. The following interactions are implemented locally for short.it; they do not imply complete CapCut feature parity:
+
+- Drag an empty area of the preview or timeline to box-select elements. Shift/Ctrl/Command-click adds or removes an element. Move, duplicate, delete, or nudge the selected elements together; a drag is one undo step. Locked elements remain protected.
+- Drag the dividers to change assistant width, properties width, or timeline height. Focus a divider and use arrow keys for the same adjustment; double-click restores its default size. Dimensions are remembered locally and bounded to the available window.
+- Click the active left navigation tab to collapse or reopen its panel. Collapsing the assistant keeps its conversation mounted and does not cancel its generation.
+- Fit canvas changes the preview zoom. Fullscreen preview uses the browser's [Fullscreen API](https://developer.mozilla.org/en-US/docs/Web/API/Fullscreen_API); when the host denies that API, the preview expands inside the application window. Escape or the exit control restores the editor.
+
+These interactions are covered by isolated browser fixtures, without modifying personal projects or invoking paid models.
+
 ## 21st.dev component research
 
 The following components were reviewed for a restrained, keyboard-friendly editing application. The catalogue pages establish authorship and their published licenses; source links identify the underlying implementation.

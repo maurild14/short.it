@@ -46,6 +46,7 @@ import type {
 } from "./shared/types";
 import { api, assetUrl, type EngineStatus } from "./api";
 import { useProject } from "./useProject";
+import { useEditorLayout } from "./components/EditorLayout";
 import Canvas, { MiniPreview } from "./components/Canvas";
 import Timeline, { formatTime } from "./components/Timeline";
 import Inspector from "./components/Inspector";
@@ -453,6 +454,7 @@ function ReferencePanel({
 
 export default function App() {
   const editor = useProject();
+  const panels = useEditorLayout();
   const project = editor.project;
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -464,7 +466,7 @@ export default function App() {
   const [help, setHelp] = useState(false);
   const [tab, setTab] = useState<"chat" | "media" | "references">("chat");
   const [mobileEditor, setMobileEditor] = useState(false);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -475,8 +477,16 @@ export default function App() {
   const [sort, setSort] = useState("recent");
   const [notice, setNotice] = useState("");
   const selectedLayer = project?.document.layers.find(
-    (layer) => layer.id === selected,
+    (layer) => selected.length === 1 && layer.id === selected[0],
   );
+  useEffect(() => {
+    setSelected((ids) => {
+      const retained = ids.filter((id) =>
+        project?.document.layers.some((layer) => layer.id === id),
+      );
+      return retained.length === ids.length ? ids : retained;
+    });
+  }, [project?.document.layers]);
   const loadEngines = useCallback(() => {
     void api<EngineStatus[]>("/engines")
       .then(setEngines)
@@ -610,45 +620,68 @@ export default function App() {
     },
     [editor.change],
   );
+  const changeLayers = useCallback(
+    (patches: Record<string, Partial<VideoLayer>>) => {
+      const current = editor.current.current;
+      if (!current || busy) return;
+      editor.change({
+        ...current.document,
+        layers: current.document.layers.map((layer) =>
+          patches[layer.id] && !layer.locked
+            ? { ...layer, ...patches[layer.id] }
+            : layer,
+        ),
+      });
+    },
+    [editor.change, busy],
+  );
   const removeLayer = useCallback(() => {
     const current = editor.current.current;
-    if (
-      !current ||
-      !selected ||
-      current.document.layers.find((layer) => layer.id === selected)?.locked
-    )
-      return;
+    if (!current || busy || !selected.length) return;
     editor.change({
       ...current.document,
-      layers: current.document.layers.filter((layer) => layer.id !== selected),
+      layers: current.document.layers.filter(
+        (layer) => !selected.includes(layer.id) || layer.locked,
+      ),
     });
-    setSelected(null);
-  }, [selected, editor.change]);
+    setSelected(
+      selected.filter(
+        (id) =>
+          current.document.layers.find((layer) => layer.id === id)?.locked,
+      ),
+    );
+  }, [selected, editor.change, busy]);
   const duplicateLayer = useCallback(() => {
     const current = editor.current.current;
-    const layer = current?.document.layers.find(
-      (layer) => layer.id === selected,
+    if (!current || busy) return;
+    const layers = current.document.layers.filter(
+      (layer) => selected.includes(layer.id) && !layer.locked,
     );
-    if (!current || !layer) return;
-    const copy = {
+    if (!layers.length || current.document.layers.length + layers.length > 500)
+      return;
+    const offset =
+      Math.max(...current.document.layers.map((layer) => layer.track)) +
+      1 -
+      Math.min(...layers.map((layer) => layer.track));
+    if (layers.some((layer) => layer.track + offset > 1000)) return;
+    const copies = layers.map((layer) => ({
       ...layer,
       id: crypto.randomUUID(),
       name: `${layer.name} copy`,
-      track:
-        Math.max(...current.document.layers.map((layer) => layer.track)) + 1,
+      track: layer.track + offset,
       x: layer.x + 24,
       y: layer.y + 24,
-    };
+    }));
     editor.change({
       ...current.document,
-      layers: [...current.document.layers, copy],
+      layers: [...current.document.layers, ...copies],
     });
-    setSelected(copy.id);
-  }, [selected, editor.change]);
+    setSelected(copies.map((copy) => copy.id));
+  }, [selected, editor.change, busy]);
   const splitLayer = useCallback(() => {
     const current = editor.current.current;
     const layer = current?.document.layers.find(
-      (layer) => layer.id === selected,
+      (layer) => selected.length === 1 && layer.id === selected[0],
     );
     if (
       !current ||
@@ -677,7 +710,7 @@ export default function App() {
         second,
       ],
     });
-    setSelected(second.id);
+    setSelected([second.id]);
   }, [selected, time, editor.change]);
 
   useEffect(() => {
@@ -710,29 +743,38 @@ export default function App() {
         event.preventDefault();
         setPlaying((value) => !value);
       } else if (event.key.toLowerCase() === "s") splitLayer();
+      else if (modifier && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        setSelected(
+          editor.current.current?.document.layers.map((layer) => layer.id) ||
+            [],
+        );
+      } else if (event.key === "Escape") setSelected([]);
       else if (
-        selectedLayer &&
-        !selectedLayer.locked &&
+        selected.length &&
         ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)
       ) {
         event.preventDefault();
         const delta = event.shiftKey ? 10 : 1;
-        changeLayer(selectedLayer.id, {
-          x:
-            selectedLayer.x +
-            (event.key === "ArrowRight"
-              ? delta
-              : event.key === "ArrowLeft"
-                ? -delta
-                : 0),
-          y:
-            selectedLayer.y +
-            (event.key === "ArrowDown"
-              ? delta
-              : event.key === "ArrowUp"
-                ? -delta
-                : 0),
-        });
+        const dx =
+          event.key === "ArrowRight"
+            ? delta
+            : event.key === "ArrowLeft"
+              ? -delta
+              : 0;
+        const dy =
+          event.key === "ArrowDown"
+            ? delta
+            : event.key === "ArrowUp"
+              ? -delta
+              : 0;
+        changeLayers(
+          Object.fromEntries(
+            (editor.current.current?.document.layers || [])
+              .filter((layer) => selected.includes(layer.id) && !layer.locked)
+              .map((layer) => [layer.id, { x: layer.x + dx, y: layer.y + dy }]),
+          ),
+        );
       }
     };
     window.addEventListener("keydown", key);
@@ -740,7 +782,8 @@ export default function App() {
   }, [
     view,
     busy,
-    selectedLayer,
+    selected,
+    changeLayers,
     editor.undo,
     editor.redo,
     duplicateLayer,
@@ -752,10 +795,11 @@ export default function App() {
     editor.open(next);
     currentView.current = "editor";
     setView("editor");
-    setSelected(null);
+    setSelected([]);
     setTime(0);
     setPlaying(false);
     setTab("chat");
+    panels.openChat();
     location.hash = `project=${next.id}`;
   }
   async function goHome() {
@@ -850,7 +894,7 @@ export default function App() {
       duration: Math.max(doc.duration, start + duration),
       layers: [...doc.layers, layer],
     });
-    setSelected(layer.id);
+    setSelected([layer.id]);
   }
   async function addReference(url: string) {
     if (!project) return;
@@ -1144,7 +1188,9 @@ export default function App() {
             <main
               id="main-content"
               tabIndex={-1}
-              className={`editor-layout ${mobileEditor ? "show-editor" : ""}`}
+              ref={panels.ref}
+              style={panels.style}
+              className={`editor-layout resizable-editor ${mobileEditor ? "show-editor" : ""} ${panels.chatCollapsed ? "chat-collapsed" : ""}`}
             >
               <nav className="editor-rail" aria-label="Editor tools">
                 <div>
@@ -1162,6 +1208,12 @@ export default function App() {
                       title={item.label}
                       className={tab === item.id ? "active" : ""}
                       onClick={() => {
+                        if (
+                          window.matchMedia("(min-width: 801px)").matches &&
+                          tab === item.id
+                        )
+                          panels.toggleChat();
+                        else panels.openChat();
                         setTab(item.id);
                         setMobileEditor(false);
                       }}
@@ -1311,6 +1363,7 @@ export default function App() {
                   </div>
                 )}
               </aside>
+              {panels.splitter("chat")}
               <div className="editor-workspace" inert={busy}>
                 <div className="canvas-tools">
                   <div>
@@ -1322,7 +1375,13 @@ export default function App() {
                       <Shapes size={15} />
                       Shape
                     </Button>
-                    <Button variant="ghost" onClick={() => setTab("media")}>
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setTab("media");
+                        panels.openChat();
+                      }}
+                    >
                       <Upload size={15} />
                       Media
                     </Button>
@@ -1348,15 +1407,27 @@ export default function App() {
                     playing={playing}
                     selected={selected}
                     onSelect={setSelected}
-                    onLayerChange={changeLayer}
+                    onLayersChange={changeLayers}
+                    disabled={busy}
                     onAddText={() => addElement("text")}
                   />
-                  <Inspector
-                    document={project.document}
-                    selected={selectedLayer}
-                    onLayerChange={changeLayer}
-                    onDocumentChange={editor.change}
-                  />
+                  {panels.splitter("inspector")}
+                  {selected.length > 1 ? (
+                    <aside className="inspector multi-selection">
+                      <strong>{selected.length} elements selected</strong>
+                      <p>
+                        Drag to move together. Shift-click to change the
+                        selection.
+                      </p>
+                    </aside>
+                  ) : (
+                    <Inspector
+                      document={project.document}
+                      selected={selectedLayer}
+                      onLayerChange={changeLayer}
+                      onDocumentChange={editor.change}
+                    />
+                  )}
                 </div>
                 <div className="transport">
                   <span className="current-time">
@@ -1390,6 +1461,7 @@ export default function App() {
                     Space to {playing ? "pause" : "play"}
                   </span>
                 </div>
+                {panels.splitter("timeline")}
                 <Timeline
                   document={project.document}
                   time={time}
@@ -1397,6 +1469,8 @@ export default function App() {
                   onSelect={setSelected}
                   onSeek={setTime}
                   onChange={changeLayer}
+                  onLayersChange={changeLayers}
+                  disabled={busy}
                   onDuplicate={duplicateLayer}
                   onDelete={removeLayer}
                   onSplit={splitLayer}
@@ -1518,7 +1592,10 @@ export default function App() {
                 ["Undo", "Ctrl Z"],
                 ["Redo", "Ctrl Shift Z"],
                 ["Split selected clip", "S"],
-                ["Duplicate element", "Ctrl D"],
+                ["Duplicate selection", "Ctrl D"],
+                ["Select all elements", "Ctrl A"],
+                ["Clear selection", "Esc"],
+                ["Add / remove from selection", "Shift click"],
                 ["Move element", "Arrow keys"],
                 ["Move by 10 pixels", "Shift Arrows"],
                 ["Delete element", "Delete"],
@@ -1532,7 +1609,9 @@ export default function App() {
             <p>
               Drag elements on the canvas to move them, use the corner to
               resize, or enter precise values in the Edit panel. Drag a clip’s
-              edges on the timeline to trim it.
+              edges on the timeline to trim it. Drag across empty canvas or
+              timeline space to select several elements, then move or delete
+              them together.
             </p>
           </div>
           <footer className="dialog-actions">

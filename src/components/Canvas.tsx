@@ -9,6 +9,8 @@ import { Maximize2, MousePointer2, Plus, Type } from "lucide-react";
 import type { Project, VideoDocument, VideoLayer } from "../shared/types";
 import { assetUrl } from "../api";
 import { Button, IconButton } from "./ui";
+import { selectionFor, useMarquee, usePointerGesture } from "./selection";
+import FullscreenButton from "./FullscreenButton";
 
 export function MediaLayer({
   projectId,
@@ -140,33 +142,41 @@ export default function Canvas({
   playing,
   selected,
   onSelect,
-  onLayerChange,
+  onLayersChange,
+  disabled = false,
   onAddText,
 }: {
   project: Project;
   time: number;
   playing: boolean;
-  selected: string | null;
-  onSelect: (id: string | null) => void;
-  onLayerChange: (id: string, patch: Partial<VideoLayer>) => void;
+  selected: string[];
+  onSelect: (ids: string[]) => void;
+  onLayersChange: (patches: Record<string, Partial<VideoLayer>>) => void;
+  disabled?: boolean;
   onAddText: () => void;
 }) {
   const viewport = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0.2);
   const [zoom, setZoom] = useState(1);
-  const [drag, setDrag] = useState<{
-    id: string;
-    patch: Partial<VideoLayer>;
-  } | null>(null);
+  const [drag, setDrag] = useState<Record<string, Partial<VideoLayer>>>({});
+  const pointerGesture = usePointerGesture();
+  const { start: marqueeStart, marquee } = useMarquee(
+    selected,
+    onSelect,
+    disabled,
+  );
   const document = project.document;
   useEffect(() => {
     const element = viewport.current!;
     const observer = new ResizeObserver(([entry]) =>
       setScale(
-        Math.min(
-          (entry.contentRect.width - 70) / document.width,
-          (entry.contentRect.height - 48) / document.height,
-          1,
+        Math.max(
+          0.01,
+          Math.min(
+            (entry.contentRect.width - 70) / document.width,
+            (entry.contentRect.height - 48) / document.height,
+            1,
+          ),
         ),
       ),
     );
@@ -175,33 +185,46 @@ export default function Canvas({
   }, [document.width, document.height]);
 
   function gesture(event: PointerEvent, layer: VideoLayer, resize = false) {
-    if (layer.locked || event.button !== 0) return;
+    if (disabled || event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
-    onSelect(layer.id);
+    const additive = event.shiftKey || event.ctrlKey || event.metaKey;
+    const ids = resize
+      ? [layer.id]
+      : selectionFor(layer.id, selected, additive);
+    onSelect(ids);
+    if (layer.locked || additive) return;
+    const layers = document.layers.filter(
+      (item) => ids.includes(item.id) && !item.locked && item.type !== "audio",
+    );
     const startX = event.clientX,
       startY = event.clientY;
     const factor = Math.max(0.01, scale * zoom);
-    let patch: Partial<VideoLayer> = {};
-    const move = (e: globalThis.PointerEvent) => {
-      const dx = (e.clientX - startX) / factor,
-        dy = (e.clientY - startY) / factor;
-      patch = resize
-        ? {
-            width: Math.max(24, Math.round(layer.width + dx)),
-            height: Math.max(24, Math.round(layer.height + dy)),
-          }
-        : { x: Math.round(layer.x + dx), y: Math.round(layer.y + dy) };
-      setDrag({ id: layer.id, patch });
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      setDrag(null);
-      if (Object.keys(patch).length) onLayerChange(layer.id, patch);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up, { once: true });
+    let patches: Record<string, Partial<VideoLayer>> = {};
+    pointerGesture(
+      (e) => {
+        if (Math.hypot(e.clientX - startX, e.clientY - startY) < 3) return;
+        const dx = (e.clientX - startX) / factor,
+          dy = (e.clientY - startY) / factor;
+        patches = Object.fromEntries(
+          layers.map((item) => [
+            item.id,
+            resize
+              ? {
+                  width: Math.max(24, Math.round(item.width + dx)),
+                  height: Math.max(24, Math.round(item.height + dy)),
+                }
+              : { x: Math.round(item.x + dx), y: Math.round(item.y + dy) },
+          ]),
+        );
+        setDrag(patches);
+      },
+      (cancelled) => {
+        setDrag({});
+        if (!cancelled && Object.keys(patches).length) onLayersChange(patches);
+        else if (!cancelled) onSelect([layer.id]);
+      },
+    );
   }
 
   const visible = document.layers.filter(
@@ -222,7 +245,7 @@ export default function Canvas({
       <div
         className="canvas-viewport"
         ref={viewport}
-        onClick={() => onSelect(null)}
+        onPointerDown={marqueeStart}
       >
         <div
           className="canvas-size"
@@ -241,20 +264,15 @@ export default function Canvas({
             }}
           >
             {visible.map((original) => {
-              const layer =
-                drag?.id === original.id
-                  ? { ...original, ...drag.patch }
-                  : original;
+              const layer = { ...original, ...drag[original.id] };
               return (
                 <div
                   key={layer.id}
-                  className={`canvas-layer ${layer.type} ${selected === layer.id ? "selected" : ""} ${layer.locked ? "locked" : ""}`}
+                  data-selection-id={layer.id}
+                  className={`canvas-layer ${layer.type} ${selected.includes(layer.id) ? "selected" : ""} ${layer.locked ? "locked" : ""}`}
                   style={layerStyle(layer, time)}
                   onPointerDown={(e) => gesture(e, layer)}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onSelect(layer.id);
-                  }}
+                  onClick={(e) => e.stopPropagation()}
                 >
                   <div className="layer-content">
                     <MediaLayer
@@ -264,7 +282,7 @@ export default function Canvas({
                       playing={playing}
                     />
                   </div>
-                  {selected === layer.id && !layer.locked && (
+                  {selected.includes(layer.id) && !layer.locked && (
                     <>
                       <span
                         className="selection-label"
@@ -275,18 +293,20 @@ export default function Canvas({
                       >
                         {layer.name}
                       </span>
-                      <button
-                        type="button"
-                        className="resize-handle"
-                        aria-label={`Resize ${layer.name}`}
-                        style={{
-                          width: 9 / (scale * zoom),
-                          height: 9 / (scale * zoom),
-                          right: -4 / (scale * zoom),
-                          bottom: -4 / (scale * zoom),
-                        }}
-                        onPointerDown={(e) => gesture(e, layer, true)}
-                      />
+                      {selected.length === 1 && (
+                        <button
+                          type="button"
+                          className="resize-handle"
+                          aria-label={`Resize ${layer.name}`}
+                          style={{
+                            width: 9 / (scale * zoom),
+                            height: 9 / (scale * zoom),
+                            right: -4 / (scale * zoom),
+                            bottom: -4 / (scale * zoom),
+                          }}
+                          onPointerDown={(e) => gesture(e, layer, true)}
+                        />
+                      )}
                     </>
                   )}
                 </div>
@@ -319,6 +339,7 @@ export default function Canvas({
           </div>
         )}
       </div>
+      {marquee}
       {document.layers
         .filter((layer) => layer.type === "audio")
         .map((layer) => (
@@ -333,9 +354,11 @@ export default function Canvas({
       <footer className="preview-footer">
         <span>
           <MousePointer2 size={13} />{" "}
-          {selected
-            ? "Drag to move · corner to resize"
-            : "Select an element to edit"}
+          {selected.length > 1
+            ? `${selected.length} selected · drag to move together`
+            : selected.length
+              ? "Drag to move · corner to resize"
+              : "Drag empty space to select elements"}
         </span>
         <div>
           <label className="sr-only" htmlFor="preview-zoom">
@@ -351,6 +374,7 @@ export default function Canvas({
             <option value={1.5}>150%</option>
             <option value={2}>200%</option>
           </select>
+          <FullscreenButton />
           <IconButton label="Fit canvas" onClick={() => setZoom(1)}>
             <Maximize2 size={14} />
           </IconButton>

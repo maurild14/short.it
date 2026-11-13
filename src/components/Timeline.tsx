@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import type { VideoDocument, VideoLayer } from "../shared/types";
 import { IconButton } from "./ui";
+import { selectionFor, useMarquee, usePointerGesture } from "./selection";
 
 export const formatTime = (seconds: number) =>
   `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}.${String(Math.floor((seconds % 1) * 100)).padStart(2, "0")}`;
@@ -39,14 +40,18 @@ export default function Timeline({
   onSelect,
   onSeek,
   onChange,
+  onLayersChange,
+  disabled = false,
   onDuplicate,
   onDelete,
   onSplit,
 }: {
   document: VideoDocument;
   time: number;
-  selected: string | null;
-  onSelect: (id: string | null) => void;
+  selected: string[];
+  onSelect: (ids: string[]) => void;
+  onLayersChange: (patches: Record<string, Partial<VideoLayer>>) => void;
+  disabled?: boolean;
   onSeek: (time: number) => void;
   onChange: (id: string, patch: Partial<VideoLayer>) => void;
   onDuplicate: () => void;
@@ -54,81 +59,112 @@ export default function Timeline({
   onSplit: () => void;
 }) {
   const [zoom, setZoom] = useState(1);
-  const [drag, setDrag] = useState<{
-    id: string;
-    start: number;
-    duration: number;
-    trimStart?: number;
-  } | null>(null);
+  const [drag, setDrag] = useState<Record<string, Partial<VideoLayer>>>({});
+  const pointerGesture = usePointerGesture();
+  const { start: marqueeStart, marquee } = useMarquee(
+    selected,
+    onSelect,
+    disabled,
+  );
   const pixels = 44 * zoom;
   const timelineWidth = Math.max(640, document.duration * pixels + 80);
   const tracks = [...new Set(document.layers.map((layer) => layer.track))].sort(
     (a, b) => b - a,
   );
-  const selection = document.layers.find((layer) => layer.id === selected);
+  const selection =
+    selected.length === 1
+      ? document.layers.find((layer) => layer.id === selected[0])
+      : undefined;
+  const editableSelection = document.layers.some(
+    (layer) => selected.includes(layer.id) && !layer.locked,
+  );
   function gesture(
     event: PointerEvent,
     layer: VideoLayer,
     mode: "move" | "left" | "right",
   ) {
-    if (layer.locked || event.button !== 0) return;
+    if (disabled || event.button !== 0) return;
     event.stopPropagation();
     event.preventDefault();
-    onSelect(layer.id);
+    const additive = event.shiftKey || event.ctrlKey || event.metaKey;
+    const ids =
+      mode !== "move" ? [layer.id] : selectionFor(layer.id, selected, additive);
+    onSelect(ids);
+    if (layer.locked || additive) return;
+    const layers = document.layers.filter(
+      (item) => ids.includes(item.id) && !item.locked,
+    );
     const start = event.clientX,
       startY = event.clientY;
-    let patch: Partial<VideoLayer> = {};
-    const move = (e: globalThis.PointerEvent) => {
-      const delta =
-        Math.round(((e.clientX - start) / pixels) * document.fps) /
-        document.fps;
-      if (mode === "move")
-        patch = {
-          start: Math.max(
-            0,
-            Math.min(document.duration - layer.duration, layer.start + delta),
-          ),
-          track: Math.max(
-            0,
-            Math.min(1000, layer.track - Math.round((e.clientY - startY) / 43)),
-          ),
-        };
-      else if (mode === "right")
-        patch = {
-          duration: Math.max(
-            1 / document.fps,
-            Math.min(document.duration - layer.start, layer.duration + delta),
-          ),
-        };
-      else {
-        const change = Math.max(
-          -(layer.type === "audio" || layer.type === "video"
-            ? Math.min(layer.start, layer.trimStart || 0)
-            : layer.start),
-          Math.min(layer.duration - 1 / document.fps, delta),
-        );
-        patch = {
-          start: layer.start + change,
-          duration: layer.duration - change,
-          trimStart: (layer.trimStart || 0) + change,
-        };
-      }
-      setDrag({
-        id: layer.id,
-        start: patch.start ?? layer.start,
-        duration: patch.duration ?? layer.duration,
-        trimStart: patch.trimStart,
-      });
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      setDrag(null);
-      if (Object.keys(patch).length) onChange(layer.id, patch);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up, { once: true });
+    let patches: Record<string, Partial<VideoLayer>> = {};
+    pointerGesture(
+      (e) => {
+        if (Math.hypot(e.clientX - start, e.clientY - startY) < 3) return;
+        const delta =
+          Math.round(((e.clientX - start) / pixels) * document.fps) /
+          document.fps;
+        if (mode === "move") {
+          const shift = Math.max(
+            -Math.min(...layers.map((item) => item.start)),
+            Math.min(
+              Math.min(
+                ...layers.map(
+                  (item) => document.duration - item.start - item.duration,
+                ),
+              ),
+              delta,
+            ),
+          );
+          const vertical = Math.max(
+            -Math.min(...layers.map((item) => item.track)),
+            Math.min(
+              1000 - Math.max(...layers.map((item) => item.track)),
+              -Math.round((e.clientY - startY) / 43),
+            ),
+          );
+          patches = Object.fromEntries(
+            layers.map((item) => [
+              item.id,
+              { start: item.start + shift, track: item.track + vertical },
+            ]),
+          );
+        } else if (mode === "right") {
+          patches = {
+            [layer.id]: {
+              duration: Math.max(
+                1 / document.fps,
+                Math.min(
+                  document.duration - layer.start,
+                  layer.duration + delta,
+                ),
+              ),
+            },
+          };
+        } else {
+          const change = Math.max(
+            -(layer.type === "audio" || layer.type === "video"
+              ? Math.min(layer.start, layer.trimStart || 0)
+              : layer.start),
+            Math.min(layer.duration - 1 / document.fps, delta),
+          );
+          patches = {
+            [layer.id]: {
+              start: layer.start + change,
+              duration: layer.duration - change,
+              trimStart: (layer.trimStart || 0) + change,
+            },
+          };
+        }
+        setDrag(patches);
+      },
+      (cancelled) => {
+        setDrag({});
+        if (!cancelled && Object.keys(patches).length) onLayersChange(patches);
+        else if (!cancelled) onSelect([layer.id]);
+      },
+    );
   }
+
   return (
     <section className="timeline-panel" aria-label="Timeline">
       <div className="timeline-toolbar">
@@ -136,6 +172,7 @@ export default function Timeline({
           <IconButton
             label="Split at playhead (S)"
             disabled={
+              disabled ||
               !selection ||
               time <= selection.start ||
               time >= selection.start + selection.duration ||
@@ -147,14 +184,14 @@ export default function Timeline({
           </IconButton>
           <IconButton
             label="Duplicate element"
-            disabled={!selection}
+            disabled={disabled || !editableSelection}
             onClick={onDuplicate}
           >
             <Copy size={15} />
           </IconButton>
           <IconButton
             label="Delete element (Delete)"
-            disabled={!selection || selection.locked}
+            disabled={disabled || !editableSelection}
             onClick={onDelete}
           >
             <Trash2 size={15} />
@@ -242,7 +279,7 @@ export default function Timeline({
               )}
             </div>
           </div>
-          <div className="timeline-tracks">
+          <div className="timeline-tracks" onPointerDown={marqueeStart}>
             {!tracks.length && (
               <div className="timeline-empty">
                 <div className="track-label">Your timeline</div>
@@ -278,49 +315,34 @@ export default function Timeline({
                       {first.hidden ? <EyeOff size={12} /> : <Eye size={12} />}
                     </IconButton>
                   </div>
-                  <div
-                    className="track-lane"
-                    style={{ width: timelineWidth }}
-                    onClick={(e) => {
-                      if (e.target === e.currentTarget) {
-                        onSelect(null);
-                        onSeek(
-                          Math.min(
-                            document.duration,
-                            (e.clientX -
-                              e.currentTarget.getBoundingClientRect().left) /
-                              pixels,
-                          ),
-                        );
-                      }
-                    }}
-                  >
+                  <div className="track-lane" style={{ width: timelineWidth }}>
                     {layers.map((original) => {
-                      const layer =
-                        drag?.id === original.id
-                          ? { ...original, ...drag }
-                          : original;
+                      const layer = { ...original, ...drag[original.id] };
                       const ClipIcon = layerIcons[layer.type];
                       return (
                         <div
                           key={layer.id}
-                          className={`timeline-clip ${layer.type} ${selected === layer.id ? "selected" : ""} ${layer.hidden ? "is-hidden" : ""}`}
+                          data-selection-id={layer.id}
+                          aria-pressed={selected.includes(layer.id)}
+                          className={`timeline-clip ${layer.type} ${selected.includes(layer.id) ? "selected" : ""} ${layer.hidden ? "is-hidden" : ""}`}
                           style={{
                             left: layer.start * pixels,
                             width: Math.max(8, layer.duration * pixels),
                           }}
                           onPointerDown={(e) => gesture(e, original, "move")}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onSelect(layer.id);
-                          }}
+                          onClick={(e) => e.stopPropagation()}
                           role="button"
                           tabIndex={0}
                           aria-label={`${layer.name}, starts ${layer.start.toFixed(1)} seconds, duration ${layer.duration.toFixed(1)} seconds`}
                           onKeyDown={(e) => {
                             if (e.key === "Enter" || e.key === " ") {
                               e.preventDefault();
-                              onSelect(layer.id);
+                              e.stopPropagation();
+                              onSelect(
+                                e.shiftKey || e.ctrlKey || e.metaKey
+                                  ? selectionFor(layer.id, selected, true)
+                                  : [layer.id],
+                              );
                               onSeek(layer.start);
                             }
                           }}
@@ -351,8 +373,11 @@ export default function Timeline({
           </div>
         </div>
       </div>
+      {marquee}
       <footer className="timeline-footer">
-        <span>Drag edges to trim · drag clips to move</span>
+        <span>
+          Drag empty space to select · Shift-click to add · drag clips to move
+        </span>
         <span>
           {document.fps} fps <span className="separator">·</span>{" "}
           {formatTime(document.duration)}

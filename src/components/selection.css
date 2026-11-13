@@ -1,0 +1,27 @@
+.selection-marquee {
+  position: fixed;
+  pointer-events: none;
+  z-index: 1000;
+  border: 1px solid #8eafff;
+  background: rgb(77 125 255 / 16%);
+}
+.canvas-viewport,
+.timeline-tracks {
+  user-select: none;
+}
+.multi-selection {
+  padding: 18px;
+}
+.multi-selection strong {
+  font-size: 13px;
+}
+.multi-selection p {
+  color: #aaaab4;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.canvas-layer,
+.timeline-clip {
+  touch-action: none;
+}

@@ -1,0 +1,84 @@
+.resizable-editor .panel-splitter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #17171b;
+  position: relative;
+  touch-action: none;
+  user-select: none;
+  z-index: 8;
+  flex-shrink: 0;
+}
+.resizable-editor .panel-splitter > span {
+  border-radius: 3px;
+  background: #666675;
+  transition: background-color 120ms;
+}
+.resizable-editor .panel-splitter:hover,
+.resizable-editor .panel-splitter:focus-visible {
+  background: #202330;
+}
+.resizable-editor .panel-splitter:hover > span,
+.resizable-editor .panel-splitter:focus-visible > span {
+  background: #a7bdff;
+}
+.resizable-editor .panel-splitter:focus-visible {
+  outline: 2px solid #a7bdff;
+  outline-offset: -2px;
+}
+.resizable-editor .chat-splitter,
+.resizable-editor .inspector-splitter {
+  cursor: col-resize;
+  width: 8px;
+}
+.resizable-editor .chat-splitter > span,
+.resizable-editor .inspector-splitter > span {
+  width: 2px;
+  height: 30px;
+}
+.resizable-editor .timeline-splitter {
+  cursor: row-resize;
+  height: 8px;
+}
+.resizable-editor .timeline-splitter > span {
+  height: 2px;
+  width: 38px;
+}
+@media (min-width: 801px) {
+  .editor-layout.resizable-editor {
+    grid-template-columns: 65px var(--chat-width) 8px minmax(0, 1fr);
+  }
+  .resizable-editor .preview-inspector {
+    grid-template-columns: minmax(0, 1fr) 8px var(--inspector-width);
+  }
+  .resizable-editor .timeline-panel {
+    height: var(--timeline-height);
+    min-height: 130px;
+    flex-shrink: 0;
+  }
+  .editor-layout.resizable-editor.chat-collapsed {
+    grid-template-columns: 65px 0 0 minmax(0, 1fr);
+  }
+  .resizable-editor.chat-collapsed > .left-panel,
+  .resizable-editor.chat-collapsed > .chat-splitter {
+    visibility: hidden;
+    overflow: hidden;
+  }
+  .resizable-editor > .generation-overlay {
+    left: calc(83px + var(--chat-width));
+    bottom: calc(53px + var(--timeline-height));
+  }
+}
+@media (max-width: 800px) {
+  .resizable-editor .panel-splitter {
+    display: none;
+  }
+}
+@media (forced-colors: active) {
+  .resizable-editor .panel-splitter > span {
+    background: ButtonText;
+  }
+  .resizable-editor .panel-splitter:focus-visible {
+    outline-color: Highlight;
+  }
+}

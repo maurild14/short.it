@@ -187,12 +187,13 @@ test("process bridge preserves UTF-8, scopes cwd, flushes the final JSONL line a
     await writeFile(
       fixture,
       `
+      import { realpathSync } from 'node:fs';
       let prompt = '';
       for await (const chunk of process.stdin) prompt += chunk;
       console.log(JSON.stringify({type:'thread.started',thread_id:'${sessionId}'}));
       if (prompt === 'wait') { setInterval(() => {}, 1000); }
       else {
-        const line = Buffer.from(JSON.stringify({type:'item.completed',item:{type:'agent_message',id:'1',text:'✓ ' + (process.cwd() === ${JSON.stringify(directory)})}}) + '\\n');
+        const line = Buffer.from(JSON.stringify({type:'item.completed',item:{type:'agent_message',id:'1',text:'✓ ' + (realpathSync(process.cwd()) === realpathSync(${JSON.stringify(directory)}))}}) + '\\n');
         const split = line.indexOf(Buffer.from('✓')) + 1;
         process.stdout.write(line.subarray(0, split));
         await new Promise(resolve => setTimeout(resolve, 10));

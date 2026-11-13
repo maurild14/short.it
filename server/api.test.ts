@@ -30,12 +30,22 @@ test(
     await writeFile(
       fixture,
       `
-    import {readFile,writeFile} from 'node:fs/promises';
+    import {readFile,writeFile,access} from 'node:fs/promises';
     let prompt=''; for await (const part of process.stdin) prompt+=part;
     const mode=prompt.split('User message:\\n').at(-1).trim();
     console.log(JSON.stringify({type:'thread.started',thread_id:'12345678-1234-5678-1234-123456789abc'}));
     if(mode==='WAIT') setInterval(()=>{},1000);
     else {
+      if(mode==='BACKGROUND') {
+        console.log(JSON.stringify({type:'item.completed',item:{id:'progress',type:'agent_message',text:'Working in background'}}));
+        while(true) {
+          try { await access('release-test'); break; } catch {}
+          await new Promise(resolve=>setTimeout(resolve,30));
+        }
+        const doc=JSON.parse(await readFile('document.json','utf8'));
+        doc.background='#123456';
+        await writeFile('document.json',JSON.stringify(doc));
+      }
       if(mode==='CORRUPT_METADATA') await writeFile('project.json','{"name":"CORRUPTED","assets":[],"messages":[]}');
       if(mode==='BAD_ASSET') {
         const doc=JSON.parse(await readFile('document.json','utf8'));
@@ -158,6 +168,69 @@ test(
           );
         },
       );
+
+      await t.test(
+        "disconnected chat keeps running and saves its result",
+        async () => {
+          const response = await request(`${route}/chat`, "POST", {
+            message: "BACKGROUND",
+            engine: "codex",
+          });
+          assert.equal(response.status, 200);
+          const snapshot = async () => (await request(`${route}/chat`)).json();
+          let active = await snapshot();
+          for (let i = 0; !active.text && i < 100; i++) {
+            await new Promise((resolve) => setTimeout(resolve, 30));
+            active = await snapshot();
+          }
+          assert.equal(active.running, true);
+          assert.match(active.text, /Working in background/);
+          await response.body!.cancel();
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          assert.equal((await snapshot()).running, true);
+          assert.equal(
+            (await request(route, "PUT", { name: "Blocked" })).status,
+            409,
+          );
+          await writeFile(path.join(directory, "release-test"), "ready");
+          let finished = await snapshot();
+          for (let i = 0; finished.running && i < 100; i++) {
+            await new Promise((resolve) => setTimeout(resolve, 30));
+            finished = await snapshot();
+          }
+          assert.equal(finished.running, false);
+          assert.equal(finished.project.document.background, "#123456");
+          assert.match(
+            finished.project.messages.at(-1).content,
+            /Working in background/,
+          );
+          assert.equal(
+            (await request(route, "PUT", { name: "After background" })).status,
+            200,
+          );
+        },
+      );
+
+      await t.test("explicit stop cancels a disconnected run", async () => {
+        const response = await request(`${route}/chat`, "POST", {
+          message: "WAIT",
+          engine: "codex",
+        });
+        await response.body!.cancel();
+        assert.equal(
+          (await (await request(`${route}/chat`)).json()).running,
+          true,
+        );
+        await request(`${route}/cancel`, "POST", {});
+        let state = await (await request(`${route}/chat`)).json();
+        for (let i = 0; state.running && i < 100; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          state = await (await request(`${route}/chat`)).json();
+        }
+        assert.equal(state.running, false);
+        assert.equal(state.status, "Stopped");
+        assert.equal(state.project.document.background, "#123456");
+      });
 
       await t.test("stale revisions and cross-origin writes fail", async () => {
         const current: Project = await (await request(route)).json();

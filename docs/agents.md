@@ -14,13 +14,13 @@ uses the CLI's configured default. Codex model choices come from the installed
 CLI's catalog; older CLIs can still run with their default when catalog discovery
 is unavailable. Claude model choices use its supported aliases.
 
-| Behavior | Codex | Claude Code |
-| --- | --- | --- |
-| Stream | `exec --json` message/tool events | Print mode with partial text events |
-| Continue | `exec resume <session-id>` | `--resume <session-id>` |
-| File edits | Workspace-write sandbox | Accept-edits mode |
-| Web | Live search and workspace network access | WebSearch and WebFetch tools |
-| Image generation | Depends on the CLI, model and account | Requires a configured tool or skill |
+| Behavior         | Codex                                    | Claude Code                         |
+| ---------------- | ---------------------------------------- | ----------------------------------- |
+| Stream           | `exec --json` message/tool events        | Print mode with partial text events |
+| Continue         | `exec resume <session-id>`               | `--resume <session-id>`             |
+| File edits       | Workspace-write sandbox                  | Accept-edits mode                   |
+| Web              | Live search and workspace network access | WebSearch and WebFetch tools        |
+| Image generation | Depends on the CLI, model and account    | Requires a configured tool or skill |
 
 The full CLI tool environment remains available, including locally installed
 skills and configured MCP servers where their normal permissions allow it.
@@ -47,7 +47,7 @@ instance with access to a personal CLI login.
 On Windows the bridge runs a native `.exe` or resolves a known npm shim to its
 JavaScript entry point using Node. It never interpolates prompts into shell
 commands or executes arbitrary `.cmd`/`.bat` files. Stop cancels the process tree;
-turns also have a 30-minute limit. Claude context files use a private temporary
+turns also have a 30-minute limit. Leaving a project or closing its browser tab does not cancel a turn. The server owns the run; reconnecting clients recover its progress through the chat status endpoint. Normal server shutdown cancels active agents and waits briefly for accepted project state to settle. Force-killing the server cannot guarantee graceful child-process cleanup. Claude context files use a private temporary
 directory and are removed after the process closes. Raw diagnostic output and
 authentication/config contents are never returned by status or error endpoints.
 

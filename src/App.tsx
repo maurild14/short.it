@@ -1216,7 +1216,7 @@ export default function App() {
                     key={project.id}
                     project={project}
                     engines={engines}
-                    onSync={(next) => editor.sync(next, true)}
+                    onSync={editor.syncAgent}
                     onSave={editor.persist}
                     onUpload={upload}
                     onBusy={setBusy}

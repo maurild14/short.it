@@ -44,6 +44,21 @@ export function useProject() {
     },
     [sync],
   );
+  const syncAgent = useCallback(
+    (next: Project) => {
+      const local = current.current;
+      if (!local || local.id !== next.id || next.revision < revision.current)
+        return;
+      if (signature(local) !== saved.current) {
+        setError(
+          "The assistant finished, but you have unsaved edits. Reopen the project to load its result; your current edit is still here.",
+        );
+        return;
+      }
+      sync(next, true);
+    },
+    [sync],
+  );
   const syncMetadata = useCallback((next: Project) => {
     const local = current.current;
     if (!local || local.id !== next.id || next.revision < revision.current)
@@ -205,6 +220,7 @@ export function useProject() {
     current,
     sync,
     syncMetadata,
+    syncAgent,
     open,
     change,
     rename,

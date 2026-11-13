@@ -1,5 +1,13 @@
 import type { Project } from "./shared/types";
 
+export type ChatStatus = {
+  running: boolean;
+  text: string;
+  status: string;
+  error?: string;
+  project: Project;
+};
+
 export type EngineStatus = {
   id: "codex" | "claude";
   label: string;

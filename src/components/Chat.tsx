@@ -13,7 +13,7 @@ import {
   X,
 } from "lucide-react";
 import type { Project, Asset } from "../shared/types";
-import { api, streamChat, type EngineStatus } from "../api";
+import { api, streamChat, type EngineStatus, type ChatStatus } from "../api";
 import { Button, IconButton, Select } from "./ui";
 
 const assetIcons = { image: Image, audio: FileAudio, video: Video };
@@ -59,6 +59,7 @@ export default function Chat({
   const [prompt, setPrompt] = useState("");
   const [attached, setAttached] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [status, setStatus] = useState("");
   const [response, setResponse] = useState("");
@@ -70,6 +71,10 @@ export default function Chat({
   const files = useRef<HTMLInputElement>(null);
   const log = useRef<HTMLDivElement>(null);
   const controller = useRef<AbortController | null>(null);
+  const mounted = useRef(false);
+  const observedRunning = useRef(false);
+  const callbacks = useRef({ onSync, onBusy });
+  callbacks.current = { onSync, onBusy };
   const engine = engines.find((item) => item.id === engineId);
   const modelEfforts = engine?.models.find(
     (item) => item.id === model,
@@ -112,7 +117,65 @@ export default function Chat({
   useEffect(() => {
     if (log.current) log.current.scrollTop = log.current.scrollHeight;
   }, [response, status, project.messages.length, pending]);
-  useEffect(() => () => controller.current?.abort(), []);
+  useEffect(() => {
+    let active = true;
+    let reconnecting = false;
+    let lastServerError: string | undefined;
+    let timer: ReturnType<typeof setTimeout>;
+    mounted.current = true;
+    callbacks.current.onBusy(true);
+    async function refresh() {
+      try {
+        if (controller.current) return;
+        const snapshot = await api<ChatStatus>(`/projects/${project.id}/chat`);
+        if (!active || controller.current) return;
+        if (snapshot.running) {
+          observedRunning.current = true;
+          setResponse(snapshot.text);
+          setStatus(snapshot.status || "Creating your video...");
+          setPending("");
+        } else {
+          if (observedRunning.current) {
+            callbacks.current.onSync(snapshot.project);
+            setAttached([]);
+          }
+          observedRunning.current = false;
+          setPending("");
+          setResponse("");
+          setStatus("");
+        }
+        if (
+          reconnecting ||
+          (snapshot.error && snapshot.error !== lastServerError)
+        )
+          setError(snapshot.error || "");
+        lastServerError = snapshot.error;
+        reconnecting = false;
+        setBusy(snapshot.running);
+        callbacks.current.onBusy(snapshot.running);
+        setChecking(false);
+      } catch (e) {
+        if (active && !controller.current) {
+          reconnecting = true;
+          setError(
+            `Could not check your assistant. Reconnecting... ${(e as Error).message}`,
+          );
+          setChecking(true);
+          callbacks.current.onBusy(true);
+        }
+      } finally {
+        if (active) timer = setTimeout(refresh, 700);
+      }
+    }
+    void refresh();
+    return () => {
+      active = false;
+      mounted.current = false;
+      clearTimeout(timer);
+      controller.current?.abort();
+      callbacks.current.onBusy(false);
+    };
+  }, [project.id]);
 
   function insertMention(asset: Asset) {
     setPrompt((value) => value.replace(/@([^@\s]*)$/, `@${asset.name} `));
@@ -137,7 +200,7 @@ export default function Chat({
   }
   async function send() {
     const message = prompt.trim();
-    if (!message || busy || uploading) return;
+    if (!message || busy || checking || uploading || controller.current) return;
     if (!engine?.available) {
       setError(engine?.reason || "Connect an assistant to start creating.");
       return;
@@ -148,57 +211,53 @@ export default function Chat({
     setPending(message);
     setResponse("");
     setStatus("Getting ready…");
-    controller.current = new AbortController();
-    let receivedDone = false;
+    const connection = new AbortController();
+    controller.current = connection;
     try {
       await onSave();
+      if (!mounted.current || connection.signal.aborted) return;
+      observedRunning.current = true;
       setPrompt("");
       setMentionOpen(false);
       await streamChat(
         project.id,
         { message, engine: engineId, model, effort, assetIds: attached },
         (event) => {
+          if (!mounted.current || connection.signal.aborted) return;
           if (event.type === "text")
             setResponse((value) => value + (event.text || ""));
           if (event.type === "status") setStatus(event.text || "Working…");
           if (event.type === "error")
-            throw new Error(
+            setError(
               event.error || "The assistant could not finish this request.",
             );
           if (event.type === "done" && event.project) {
-            receivedDone = true;
             onSync(event.project);
             setPending("");
             setResponse("");
             setAttached([]);
           }
         },
-        controller.current.signal,
+        connection.signal,
       );
-      if (!receivedDone)
-        throw new Error(
-          "The connection ended before your edit was saved. Try again.",
-        );
     } catch (e) {
-      if ((e as Error).name !== "AbortError") setError((e as Error).message);
-      try {
-        onSync(await api<Project>(`/projects/${project.id}`));
-      } catch {
-        /* Keep the current edit if the server is temporarily unavailable. */
+      if (mounted.current && !connection.signal.aborted) {
+        setError((e as Error).message);
+        setStatus("Reconnecting...");
       }
-      setPending("");
     } finally {
-      setBusy(false);
-      onBusy(false);
-      setStatus("");
-      controller.current = null;
+      if (controller.current === connection) controller.current = null;
+      // The server owns completion; polling also recovers interrupted streams.
+      if (mounted.current && !connection.signal.aborted) setChecking(true);
     }
   }
   async function stop() {
-    controller.current?.abort();
-    await api(`/projects/${project.id}/cancel`, { method: "POST" }).catch(
-      () => {},
-    );
+    try {
+      await api(`/projects/${project.id}/cancel`, { method: "POST" });
+      if (mounted.current) setStatus("Stopping...");
+    } catch (e) {
+      if (mounted.current) setError((e as Error).message);
+    }
   }
 
   return (
@@ -371,7 +430,7 @@ export default function Chat({
             value={prompt}
             rows={3}
             placeholder="Describe your video, or ask for an edit…"
-            disabled={busy}
+            disabled={busy || checking}
             onChange={(e) => {
               setPrompt(e.target.value);
               setMentionOpen(true);
@@ -424,14 +483,14 @@ export default function Chat({
               />
               <IconButton
                 label="Attach media"
-                disabled={busy || uploading}
+                disabled={busy || checking || uploading}
                 onClick={() => files.current?.click()}
               >
                 <Paperclip size={16} />
               </IconButton>
               <IconButton
                 label="Mention an asset"
-                disabled={busy}
+                disabled={busy || checking}
                 onClick={() => {
                   setPrompt(
                     (value) =>
@@ -458,7 +517,7 @@ export default function Chat({
               <IconButton
                 label="Send message"
                 className="send-button"
-                disabled={!prompt.trim() || uploading}
+                disabled={checking || !prompt.trim() || uploading}
                 onClick={() => void send()}
               >
                 <ArrowUp size={18} />
@@ -471,7 +530,7 @@ export default function Chat({
             label="Assistant provider"
             value={engineId}
             onChange={(id) => setEngineId(id as "codex" | "claude")}
-            disabled={busy}
+            disabled={busy || checking}
             options={
               engines.length
                 ? engines.map((item) => ({ value: item.id, label: item.label }))
@@ -488,7 +547,7 @@ export default function Chat({
               setModel(id);
               localStorage.setItem(`short-it-model-${engineId}`, id);
             }}
-            disabled={busy || !engine?.models.length}
+            disabled={busy || checking || !engine?.models.length}
             options={
               engine?.models.length
                 ? engine.models.map((item) => ({
@@ -503,7 +562,7 @@ export default function Chat({
               label="Thinking effort"
               value={effort}
               onChange={setEffort}
-              disabled={busy}
+              disabled={busy || checking}
               options={efforts.map((item) => ({
                 value: item.id,
                 label: item.label,

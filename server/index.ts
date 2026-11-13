@@ -23,7 +23,7 @@ import {
   validateAssetReferences,
   safeId,
 } from "./store.ts";
-import { listEngines, runAgent } from "./agents.ts";
+import { listEngines, runAgent, type AgentEvent } from "./agents.ts";
 import {
   validateReferenceUrl,
   processReference,
@@ -63,6 +63,11 @@ const jobs = new Map<string, Job>();
 const exportPaths = new Map<string, string>();
 const running = new Map<string, AbortController>();
 const importing = new Set<string>();
+let shuttingDown = false;
+const chatStates = new Map<
+  string,
+  { text: string; status: string; error?: string }
+>();
 
 app.use((req, res, next) => {
   const host = req.headers.host;
@@ -89,6 +94,7 @@ const upload = multer({
 });
 const projectName = z.string().trim().min(1).max(100);
 function requireIdle(id: string) {
+  if (shuttingDown) throw new HttpError(503, "The server is shutting down.");
   if (running.has(id) || importing.has(id))
     throw new HttpError(
       409,
@@ -412,6 +418,18 @@ async function importAgentAssets(project: Project) {
   }
   return additions;
 }
+app.get("/api/projects/:id/chat", async (req, res) => {
+  const id = safeId(req.params.id);
+  const active = running.has(id);
+  const project = await store.read(id);
+  res.json({
+    text: "",
+    status: "",
+    ...chatStates.get(id),
+    running: active || running.has(id),
+    project,
+  });
+});
 app.post("/api/projects/:id/chat", async (req, res) => {
   const id = req.params.id;
   requireIdle(id);
@@ -434,6 +452,16 @@ app.post("/api/projects/:id/chat", async (req, res) => {
     throw new HttpError(400, "Unknown attachment");
   const controller = new AbortController();
   running.set(id, controller);
+  const state: { text: string; status: string; error?: string } = {
+    text: "",
+    status: "Getting ready...",
+  };
+  chatStates.set(id, state);
+  if (chatStates.size > 1000)
+    for (const key of chatStates.keys()) {
+      if (!running.has(key)) chatStates.delete(key);
+      if (chatStates.size <= 1000) break;
+    }
   store.guard(initial);
   try {
     await atomicJson(
@@ -449,20 +477,21 @@ app.post("/api/projects/:id/chat", async (req, res) => {
         assetIds: body.assetIds,
       });
     });
-    res
-      .status(200)
-      .set({
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      });
+    res.status(200).set({
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
     res.flushHeaders();
-    const emit = (event: unknown) => {
+    const emit = (event: AgentEvent | { type: "done"; project: Project }) => {
+      if (event.type === "text") state.text += event.text;
+      if (event.type === "status") state.status = event.text;
+      if (event.type === "error") {
+        state.error = event.error;
+        state.status = "Failed";
+      }
       if (!res.destroyed) res.write(`data: ${JSON.stringify(event)}\n\n`);
     };
-    res.on("close", () => {
-      if (!res.writableEnded) controller.abort();
-    });
     const heartbeat = setInterval(() => {
       if (!res.destroyed) res.write(": keepalive\n\n");
     }, 15000);
@@ -485,6 +514,11 @@ app.post("/api/projects/:id/chat", async (req, res) => {
         emit,
         controller.signal,
       );
+      state.status = result.cancelled
+        ? "Stopped"
+        : result.ok
+          ? "Completed"
+          : "Failed";
       let generated: Project["document"] | undefined;
       let additions: Asset[] = [];
       if (result.ok && !result.cancelled) {
@@ -547,9 +581,14 @@ app.post("/api/projects/:id/chat", async (req, res) => {
       clearInterval(heartbeat);
       res.end();
     }
+  } catch (error) {
+    state.error = message(error);
+    state.status = "Failed";
+    throw error;
   } finally {
     store.unguard(id);
     running.delete(id);
+    state.text = "";
   }
 });
 app.post("/api/projects/:id/cancel", (req, res) => {
@@ -595,3 +634,19 @@ server.on("error", (error) => {
   console.error(message(error));
   process.exitCode = 1;
 });
+
+function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  server.close();
+  for (const controller of running.values()) controller.abort();
+  const wait = setInterval(() => {
+    if (!running.size) {
+      clearInterval(wait);
+      process.exit(0);
+    }
+  }, 100);
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

@@ -9,7 +9,35 @@ import {
   validateAssetReferences,
   safeId,
 } from "./store.ts";
-import { newDocument } from "../src/shared/types.ts";
+import { MAX_LAYERS, newDocument } from "../src/shared/types.ts";
+
+test("large documents accept the shared layer budget and reject overflow", () => {
+  const layers = Array.from({ length: MAX_LAYERS }, (_, i) => ({
+    id: `layer-${i}`,
+    name: "Shape",
+    type: "shape",
+    track: 0,
+    start: 0,
+    duration: 1,
+    x: 0,
+    y: 0,
+    width: 10,
+    height: 10,
+    rotation: 0,
+    opacity: 1,
+  }));
+  assert.equal(
+    documentSchema.parse({ ...newDocument(), layers }).layers.length,
+    MAX_LAYERS,
+  );
+  assert.equal(
+    documentSchema.safeParse({
+      ...newDocument(),
+      layers: [...layers, { ...layers[0], id: "overflow" }],
+    }).success,
+    false,
+  );
+});
 
 test("reject traversal, invalid timing and duplicate layer IDs", () => {
   assert.throws(() => safeId("../private"));

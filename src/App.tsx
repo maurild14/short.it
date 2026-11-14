@@ -45,6 +45,7 @@ import type {
   VideoLayer,
 } from "./shared/types";
 import { api, assetUrl, type EngineStatus } from "./api";
+import { MAX_LAYERS } from "./shared/types";
 import { useProject } from "./useProject";
 import { useEditorLayout } from "./components/EditorLayout";
 import Canvas, { MiniPreview } from "./components/Canvas";
@@ -657,8 +658,13 @@ export default function App() {
     const layers = current.document.layers.filter(
       (layer) => selected.includes(layer.id) && !layer.locked,
     );
-    if (!layers.length || current.document.layers.length + layers.length > 500)
+    if (!layers.length) return;
+    if (current.document.layers.length + layers.length > MAX_LAYERS) {
+      editor.setError(
+        `A video can contain up to ${MAX_LAYERS.toLocaleString()} elements.`,
+      );
       return;
+    }
     const offset =
       Math.max(...current.document.layers.map((layer) => layer.track)) +
       1 -
@@ -680,6 +686,12 @@ export default function App() {
   }, [selected, editor.change, busy]);
   const splitLayer = useCallback(() => {
     const current = editor.current.current;
+    if (current && current.document.layers.length >= MAX_LAYERS) {
+      editor.setError(
+        `A video can contain up to ${MAX_LAYERS.toLocaleString()} elements.`,
+      );
+      return;
+    }
     const layer = current?.document.layers.find(
       (layer) => selected.length === 1 && layer.id === selected[0],
     );
@@ -853,6 +865,12 @@ export default function App() {
   function addElement(type: "text" | "shape", asset?: Asset) {
     if (!project) return;
     const doc = editor.current.current!.document;
+    if (doc.layers.length >= MAX_LAYERS) {
+      editor.setError(
+        `A video can contain up to ${MAX_LAYERS.toLocaleString()} elements.`,
+      );
+      return;
+    }
     const start = Math.min(time, doc.duration - 1 / doc.fps);
     const duration =
       asset?.type !== "image" && asset?.duration

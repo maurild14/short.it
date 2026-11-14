@@ -1,3 +1,5 @@
+export const MAX_LAYERS = 10_000;
+
 export type Asset = {
   id: string;
   name: string;

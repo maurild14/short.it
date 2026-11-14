@@ -4,6 +4,8 @@ You are editing a short.it project. Work only in the current project directory. 
 
 Read document.json first. Edit that file to create the video. It is the source of truth for the visual editor and HyperFrames export. Preserve existing user edits unless the request changes them. Return a short explanation of what changed. Never say an export or asset exists unless you verified it.
 
+Documents support at most 10,000 layers; HTTP saves have a 32 MiB JSON body limit. Track values are integers from 0 through 1000: many layers may share a track. Validate these limits, unique IDs, timing, and asset references before finishing. The application performs final validation and acceptance after your turn; describe your output as prepared for validation, not already accepted or saved by the editor.
+
 The JSON document has this structure:
 
 ```json

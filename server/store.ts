@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
   newDocument,
+  MAX_LAYERS,
   type Project,
   type VideoDocument,
 } from "../src/shared/types.ts";
@@ -64,7 +65,7 @@ export const documentSchema = z
           hidden: z.boolean().optional(),
         }),
       )
-      .max(500),
+      .max(MAX_LAYERS),
   })
   .superRefine((doc, ctx) => {
     const ids = new Set<string>();

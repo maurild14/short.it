@@ -54,6 +54,7 @@ test(
         await writeFile('document.json',JSON.stringify(doc));
       }
       console.log(JSON.stringify({type:'item.completed',item:{id:'m1',type:'agent_message',text:process.argv.includes('resume')?'RESUMED':'DONE'}}));
+      if(mode==='FAIL') process.exit(1);
       console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:1,output_tokens:1}}));
     }
   `,
@@ -130,6 +131,15 @@ test(
           assert.match(stream, /invalid edit/);
           const current: Project = await (await request(route)).json();
           assert.deepEqual(current.document, project.document);
+          assert.match(
+            current.messages.at(-1)!.content,
+            /Generation failed.*No edit was applied/,
+          );
+          assert.doesNotMatch(current.messages.at(-1)!.content, /DONE|RESUMED/);
+          const rejected = await (await request(`${route}/chat`)).json();
+          assert.equal(rejected.running, false);
+          assert.equal(rejected.status, "Failed");
+          assert.match(rejected.error, /invalid edit/);
           assert.deepEqual(
             JSON.parse(
               await readFile(path.join(directory, "document.json"), "utf8"),
@@ -141,6 +151,29 @@ test(
             engine: "codex",
           });
           assert.match(await continuation.text(), /RESUMED/);
+        },
+      );
+
+      await t.test(
+        "a failed CLI cannot persist its premature success claim",
+        async () => {
+          const before: Project = await (await request(route)).json();
+          const response = await request(`${route}/chat`, "POST", {
+            message: "FAIL",
+            engine: "codex",
+          });
+          await response.text();
+          const state = await (await request(`${route}/chat`)).json();
+          assert.equal(state.status, "Failed");
+          assert.deepEqual(state.project.document, before.document);
+          assert.match(
+            state.project.messages.at(-1).content,
+            /Generation failed.*No edit was applied/,
+          );
+          assert.doesNotMatch(
+            state.project.messages.at(-1).content,
+            /DONE|RESUMED/,
+          );
         },
       );
 
@@ -199,6 +232,7 @@ test(
             finished = await snapshot();
           }
           assert.equal(finished.running, false);
+          assert.equal(finished.status, "Completed");
           assert.equal(finished.project.document.background, "#123456");
           assert.match(
             finished.project.messages.at(-1).content,
@@ -229,6 +263,10 @@ test(
         }
         assert.equal(state.running, false);
         assert.equal(state.status, "Stopped");
+        assert.match(
+          state.project.messages.at(-1).content,
+          /Generation stopped.*No edit was applied/,
+        );
         assert.equal(state.project.document.background, "#123456");
       });
 

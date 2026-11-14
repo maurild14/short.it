@@ -87,7 +87,7 @@ app.use((req, res, next) => {
   if (req.path.startsWith("/api/")) res.setHeader("Cache-Control", "no-store");
   next();
 });
-app.use(express.json({ limit: "3mb" }));
+app.use(express.json({ limit: "32mb" }));
 const upload = multer({
   dest: uploadRoot,
   limits: { fileSize: 512 * 1024 * 1024, files: 10, fields: 0 },
@@ -514,11 +514,8 @@ app.post("/api/projects/:id/chat", async (req, res) => {
         emit,
         controller.signal,
       );
-      state.status = result.cancelled
-        ? "Stopped"
-        : result.ok
-          ? "Completed"
-          : "Failed";
+      if (result.ok && !result.cancelled)
+        emit({ type: "status", text: "Validating and saving your edit..." });
       let generated: Project["document"] | undefined;
       let additions: Asset[] = [];
       if (result.ok && !result.cancelled) {
@@ -551,6 +548,11 @@ app.post("/api/projects/:id/chat", async (req, res) => {
           initial.document,
         );
       }
+      const finalText = generated
+        ? result.text
+        : result.cancelled
+          ? "Generation stopped. No edit was applied; your previous video is unchanged."
+          : `Generation failed. No edit was applied; your previous video is unchanged. ${state.error || "The assistant did not complete successfully."}`;
       const project = await store.update(id, (p) => {
         if (result.sessionId) {
           p.sessions ??= {};
@@ -560,22 +562,35 @@ app.post("/api/projects/:id/chat", async (req, res) => {
           p.document = generated;
           p.assets.push(...additions);
         }
-        if (result.text)
+        if (finalText)
           p.messages.push({
             id: randomUUID(),
             role: "assistant",
-            content: result.text,
+            content: finalText,
             createdAt: new Date().toISOString(),
           });
       });
+      state.status = generated
+        ? "Completed"
+        : result.cancelled
+          ? "Stopped"
+          : "Failed";
       emit({ type: "done", project });
     } catch (error) {
       await atomicJson(
         path.join(store.directory(id), "document.json"),
         initial.document,
       );
-      const project = await store.update(id, () => {});
-      emit({ type: "error", error: message(error) });
+      const failure = `Generation failed. No edit was applied; your previous video is unchanged. ${message(error)}`;
+      emit({ type: "error", error: failure });
+      const project = await store.update(id, (p) => {
+        p.messages.push({
+          id: randomUUID(),
+          role: "assistant",
+          content: failure,
+          createdAt: new Date().toISOString(),
+        });
+      });
       emit({ type: "done", project });
     } finally {
       clearInterval(heartbeat);

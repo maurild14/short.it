@@ -11,6 +11,7 @@ import {
   ExternalLink,
   FileAudio,
   Film,
+  Folder,
   FolderOpen,
   Home,
   Image,
@@ -31,6 +32,7 @@ import {
   SkipBack,
   Sparkles,
   Type,
+  Trash2,
   Undo2,
   Upload,
   Video,
@@ -40,6 +42,7 @@ import type {
   Asset,
   Job,
   Project,
+  ProjectFolder,
   Reference,
   VideoDocument,
   VideoLayer,
@@ -52,6 +55,11 @@ import Canvas, { MiniPreview } from "./components/Canvas";
 import Timeline, { formatTime } from "./components/Timeline";
 import Inspector from "./components/Inspector";
 import Chat from "./components/Chat";
+import {
+  LibraryDialog,
+  ProjectActions,
+  type LibraryAction,
+} from "./components/ProjectLibrary";
 import {
   Button,
   Dialog,
@@ -458,6 +466,13 @@ export default function App() {
   const panels = useEditorLayout();
   const project = editor.project;
   const [projects, setProjects] = useState<Project[]>([]);
+  const [folders, setFolders] = useState<ProjectFolder[]>([]);
+  const [activeFolder, setActiveFolder] = useState<string | null>(() =>
+    new URLSearchParams(location.hash.slice(1)).get("folder"),
+  );
+  const [libraryAction, setLibraryAction] = useState<LibraryAction | null>(
+    null,
+  );
   const [loading, setLoading] = useState(true);
   const [engines, setEngines] = useState<EngineStatus[]>([]);
   const [view, setView] = useState<"dashboard" | "editor">("dashboard");
@@ -493,10 +508,14 @@ export default function App() {
       .then(setEngines)
       .catch((e) => editor.setError(e.message));
   }, []);
-  const loadProjects = useCallback(
-    () => api<Project[]>("/projects").then(setProjects),
-    [],
-  );
+  const loadProjects = useCallback(async () => {
+    const [projects, folders] = await Promise.all([
+      api<Project[]>("/projects"),
+      api<ProjectFolder[]>("/folders"),
+    ]);
+    setProjects(projects);
+    setFolders(folders);
+  }, []);
 
   useEffect(() => {
     loadEngines();
@@ -506,8 +525,11 @@ export default function App() {
     let navigation = 0;
     const navigate = async () => {
       const hash = location.hash;
-      if (hash && !hash.startsWith("#project=")) return;
-      const id = new URLSearchParams(hash.slice(1)).get("project");
+      if (hash && !hash.startsWith("#project=") && !hash.startsWith("#folder="))
+        return;
+      const params = new URLSearchParams(hash.slice(1));
+      const id = params.get("project");
+      if (!id) setActiveFolder(params.get("folder"));
       if (
         (id &&
           currentView.current === "editor" &&
@@ -827,7 +849,7 @@ export default function App() {
   async function createProject(name: string, urls: string[]) {
     let next = await api<Project>("/projects", {
       method: "POST",
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, folderId: folder?.id ?? null }),
     });
     setNewProject(false);
     openProject(next);
@@ -938,7 +960,11 @@ export default function App() {
     }
   }
 
-  const filtered = projects
+  const folder = folders.find((item) => item.id === activeFolder);
+  const folderProjects = folder
+    ? projects.filter((item) => item.folderId === folder.id)
+    : projects;
+  const filtered = folderProjects
     .filter((item) => item.name.toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) =>
       sort === "name"
@@ -962,6 +988,7 @@ export default function App() {
           <aside className="dashboard-sidebar">
             <a
               className="brand-link"
+              aria-label="short.it home"
               href="#"
               onClick={(e) => {
                 e.preventDefault();
@@ -972,7 +999,16 @@ export default function App() {
             </a>
             <div className="workspace-label">Your workspace</div>
             <nav aria-label="Main navigation">
-              <button type="button" className="sidebar-item active">
+              <button
+                type="button"
+                title="Projects"
+                className={`sidebar-item ${!folder ? "active" : ""}`}
+                aria-current={!folder ? "page" : undefined}
+                onClick={() => {
+                  setActiveFolder(null);
+                  location.hash = "";
+                }}
+              >
                 <LayoutGrid size={17} />
                 <span>Projects</span>
                 <span className="sidebar-count">{projects.length}</span>
@@ -980,16 +1016,53 @@ export default function App() {
               <button
                 type="button"
                 className="sidebar-item"
+                aria-label="Assistants"
                 onClick={() => setConnections(true)}
               >
                 <Sparkles size={17} />
                 <span>Assistants</span>
               </button>
             </nav>
+            <nav className="folder-navigation" aria-label="Folders">
+              <div className="folder-heading">
+                <span>Folders</span>
+                <IconButton
+                  label="New folder"
+                  onClick={() => setLibraryAction({ type: "createFolder" })}
+                >
+                  <Plus size={15} />
+                </IconButton>
+              </div>
+              {folders.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  title={item.name}
+                  aria-current={folder?.id === item.id ? "page" : undefined}
+                  className={`sidebar-item ${folder?.id === item.id ? "active" : ""}`}
+                  onClick={() => {
+                    setActiveFolder(item.id);
+                    setSearch("");
+                    location.hash = `folder=${item.id}`;
+                  }}
+                >
+                  <Folder size={17} />
+                  <span>{item.name}</span>
+                  <span className="sidebar-count">
+                    {
+                      projects.filter((project) => project.folderId === item.id)
+                        .length
+                    }
+                  </span>
+                </button>
+              ))}
+              {!folders.length && <p>Keep related projects together.</p>}
+            </nav>
             <div className="sidebar-footer">
               <button
                 type="button"
                 className="sidebar-item"
+                aria-label="A little help"
                 onClick={() => setHelp(true)}
               >
                 <CircleHelp size={17} />
@@ -1009,6 +1082,15 @@ export default function App() {
             <header className="dashboard-topbar">
               <span>
                 Workspace <ChevronRight size={12} /> Projects
+                {folder && (
+                  <>
+                    <ChevronRight size={12} />
+                    <span className="folder-path">
+                      <Folder size={13} />
+                      <span>{folder.name}</span>
+                    </span>
+                  </>
+                )}
               </span>
               <IconButton
                 label="Assistant connections"
@@ -1040,10 +1122,37 @@ export default function App() {
               </div>
               <div className="projects-heading">
                 <div>
-                  <h2>All projects</h2>
-                  <span>{projects.length}</span>
+                  <h2>{folder?.name || "All projects"}</h2>
+                  <span>{folderProjects.length}</span>
+                  {folder && (
+                    <IconButton
+                      label="Delete folder"
+                      onClick={() =>
+                        setLibraryAction({ type: "deleteFolder", folder })
+                      }
+                    >
+                      <Trash2 size={14} />
+                    </IconButton>
+                  )}
                 </div>
                 <div className="project-filters">
+                  <Select
+                    className="folder-filter"
+                    label="View projects"
+                    value={folder?.id || ""}
+                    onChange={(id) => {
+                      setActiveFolder(id || null);
+                      setSearch("");
+                      location.hash = id ? `folder=${id}` : "";
+                    }}
+                    options={[
+                      { value: "", label: "All projects" },
+                      ...folders.map((item) => ({
+                        value: item.id,
+                        label: item.name,
+                      })),
+                    ]}
+                  />
                   <label className="search-field">
                     <Search size={14} />
                     <span className="sr-only">Search projects</span>
@@ -1077,23 +1186,27 @@ export default function App() {
               ) : filtered.length ? (
                 <div className="project-grid">
                   {filtered.map((item) => (
-                    <button
-                      type="button"
-                      className="project-card"
-                      key={item.id}
-                      onClick={() => openProject(item)}
-                    >
-                      <MiniPreview project={item} />
-                      <div className="project-card-info">
-                        <h3>{item.name}</h3>
-                        <span>
-                          {dateLabel(item.updatedAt)}
-                          <span>·</span>
-                          {Math.round(item.document.duration)}s
-                        </span>
-                        <ArrowRight size={15} />
-                      </div>
-                    </button>
+                    <article className="project-tile" key={item.id}>
+                      <button
+                        type="button"
+                        className="project-card"
+                        onClick={() => openProject(item)}
+                      >
+                        <MiniPreview project={item} />
+                        <div className="project-card-info">
+                          <h3>{item.name}</h3>
+                          <span>
+                            {dateLabel(item.updatedAt)}
+                            <span>·</span>
+                            {Math.round(item.document.duration)}s
+                          </span>
+                        </div>
+                      </button>
+                      <ProjectActions
+                        project={item}
+                        onAction={setLibraryAction}
+                      />
+                    </article>
                   ))}
                 </div>
               ) : (
@@ -1109,16 +1222,22 @@ export default function App() {
                   <h3>
                     {search
                       ? "No projects by that name."
-                      : "A blank canvas. A lot of possibilities."}
+                      : folder
+                        ? "A little room for your next idea."
+                        : "A blank canvas. A lot of possibilities."}
                   </h3>
                   <p>
                     {search
                       ? "Try a different search."
-                      : "Start with a prompt, a favorite video, or the audio you’ve been saving."}
+                      : folder
+                        ? "Create a project here or move one in from All projects."
+                        : "Start with a prompt, a favorite video, or the audio you’ve been saving."}
                   </p>
                   {!search && (
                     <Button onClick={() => setNewProject(true)}>
-                      Create your first project
+                      {folder
+                        ? "Create a project"
+                        : "Create your first project"}
                       <ArrowRight size={14} />
                     </Button>
                   )}
@@ -1519,6 +1638,55 @@ export default function App() {
         <NewProject
           onClose={() => setNewProject(false)}
           onCreate={createProject}
+        />
+      )}
+      {libraryAction && (
+        <LibraryDialog
+          action={libraryAction}
+          folders={folders}
+          onClose={() => setLibraryAction(null)}
+          onSubmit={async (value) => {
+            const action = libraryAction;
+            if (action.type === "createFolder") {
+              const created = await api<ProjectFolder>("/folders", {
+                method: "POST",
+                body: JSON.stringify({ name: value }),
+              });
+              setFolders((items) => [...items, created]);
+              setActiveFolder(created.id);
+              setSearch("");
+              location.hash = `folder=${created.id}`;
+              setNotice("Folder created");
+            } else if (action.type === "deleteFolder") {
+              await api(`/folders/${action.folder.id}`, { method: "DELETE" });
+              setActiveFolder(null);
+              location.hash = "";
+              await loadProjects();
+              setNotice(
+                "Folder deleted. Your projects are still in All projects.",
+              );
+            } else if (action.type === "moveProject") {
+              const next = await api<Project>(
+                `/projects/${action.project.id}/folder`,
+                {
+                  method: "PUT",
+                  body: JSON.stringify({ folderId: value || null }),
+                },
+              );
+              setProjects((items) =>
+                items.map((item) => (item.id === next.id ? next : item)),
+              );
+              editor.syncMetadata(next);
+              setNotice("Project moved");
+            } else {
+              await api(`/projects/${action.project.id}`, { method: "DELETE" });
+              setProjects((items) =>
+                items.filter((item) => item.id !== action.project.id),
+              );
+              setNotice("Project deleted");
+            }
+            setLibraryAction(null);
+          }}
         />
       )}
       {connections && (

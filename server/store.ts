@@ -5,6 +5,7 @@ import {
   rename,
   readdir,
   lstat,
+  rm,
 } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -13,6 +14,7 @@ import {
   newDocument,
   MAX_LAYERS,
   type Project,
+  type ProjectFolder,
   type VideoDocument,
 } from "../src/shared/types.ts";
 
@@ -122,6 +124,91 @@ export class ProjectStore {
   async init() {
     await mkdir(this.root, { recursive: true });
   }
+  async folders(): Promise<ProjectFolder[]> {
+    try {
+      const filename = path.join(this.root, ".folders.json");
+      if ((await lstat(filename)).isSymbolicLink())
+        throw new HttpError(400, "Folder file links are not supported");
+      return z
+        .array(
+          z.object({ id: z.string().uuid(), name: z.string().min(1).max(100) }),
+        )
+        .parse(JSON.parse(await readFile(filename, "utf8")));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+  }
+  async createFolder(name: string) {
+    return this.serialize(".folders", async () => {
+      const folders = await this.folders();
+      name = z.string().trim().min(1).max(100).parse(name);
+      if (
+        folders.some(
+          (folder) => folder.name.toLowerCase() === name.toLowerCase(),
+        )
+      )
+        throw new HttpError(409, "A folder with this name already exists");
+      const folder = { id: randomUUID(), name };
+      await this.init();
+      await atomicJson(path.join(this.root, ".folders.json"), [
+        ...folders,
+        folder,
+      ]);
+      return folder;
+    });
+  }
+  async removeFolder(id: string) {
+    safeId(id);
+    return this.serialize(".folders", async () => {
+      const folders = await this.folders();
+      if (!folders.some((folder) => folder.id === id))
+        throw new HttpError(404, "Folder not found");
+      for (const project of await this.list()) {
+        if (project.folderId === id)
+          await this.update(project.id, (p) => {
+            delete p.folderId;
+          });
+      }
+      await atomicJson(
+        path.join(this.root, ".folders.json"),
+        folders.filter((folder) => folder.id !== id),
+      );
+    });
+  }
+  async move(id: string, folderId: string | null) {
+    return this.serialize(".folders", async () => {
+      if (
+        folderId !== null &&
+        !(await this.folders()).some((folder) => folder.id === folderId)
+      )
+        throw new HttpError(404, "Folder not found");
+      return this.update(id, (p) => {
+        if (folderId === null) delete p.folderId;
+        else p.folderId = folderId;
+      });
+    });
+  }
+  async remove(id: string) {
+    const directory = this.directory(id);
+    return this.serialize(id, async () => {
+      const project = await this.read(id);
+      if (
+        this.guarded.has(id) ||
+        project.references.some((r) => !["ready", "error"].includes(r.status))
+      )
+        throw new HttpError(
+          409,
+          "Wait for the current operation to finish before deleting this project.",
+        );
+      if (
+        path.dirname(directory) !== this.root ||
+        (await lstat(directory)).isSymbolicLink()
+      )
+        throw new HttpError(400, "Project links are not supported");
+      await rm(directory, { recursive: true });
+    });
+  }
   guard(project: Project) {
     this.guarded.set(project.id, structuredClone(project));
   }
@@ -177,47 +264,55 @@ export class ProjectStore {
       });
     }
   }
-  async create(name: string) {
-    const now = new Date().toISOString();
-    const project: Project = {
-      id: randomUUID(),
-      name,
-      createdAt: now,
-      updatedAt: now,
-      revision: 0,
-      assets: [],
-      references: [],
-      messages: [],
-      document: newDocument(),
-    };
-    const dir = this.directory(project.id);
-    await mkdir(path.join(dir, "assets"), { recursive: true });
-    await mkdir(path.join(dir, "transcripciones"));
-    await atomicJson(path.join(dir, "document.json"), project.document);
-    await atomicJson(path.join(dir, "project.json"), project);
-    return project;
+  async create(name: string, folderId: string | null = null) {
+    return this.serialize(".folders", async () => {
+      if (
+        folderId !== null &&
+        !(await this.folders()).some((folder) => folder.id === folderId)
+      )
+        throw new HttpError(404, "Folder not found");
+      const now = new Date().toISOString();
+      const project: Project = {
+        id: randomUUID(),
+        name,
+        ...(folderId ? { folderId } : {}),
+        createdAt: now,
+        updatedAt: now,
+        revision: 0,
+        assets: [],
+        references: [],
+        messages: [],
+        document: newDocument(),
+      };
+      const dir = this.directory(project.id);
+      await mkdir(path.join(dir, "assets"), { recursive: true });
+      await mkdir(path.join(dir, "transcripciones"));
+      await atomicJson(path.join(dir, "document.json"), project.document);
+      await atomicJson(path.join(dir, "project.json"), project);
+      return project;
+    });
   }
   async update(
     id: string,
     mutate: (project: Project) => void | Promise<void>,
   ): Promise<Project> {
     safeId(id);
+    return this.serialize(id, async () => {
+      const project = await this.read(id);
+      await mutate(project);
+      project.revision++;
+      project.updatedAt = new Date().toISOString();
+      await atomicJson(path.join(this.directory(id), "project.json"), project);
+      if (this.guarded.has(id)) this.guarded.set(id, structuredClone(project));
+      return project;
+    });
+  }
+  private async serialize<T>(
+    id: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
     const previous = this.queues.get(id) ?? Promise.resolve();
-    const next = previous
-      .catch(() => {})
-      .then(async () => {
-        const project = await this.read(id);
-        await mutate(project);
-        project.revision++;
-        project.updatedAt = new Date().toISOString();
-        await atomicJson(
-          path.join(this.directory(id), "project.json"),
-          project,
-        );
-        if (this.guarded.has(id))
-          this.guarded.set(id, structuredClone(project));
-        return project;
-      });
+    const next = previous.catch(() => {}).then(operation);
     this.queues.set(id, next);
     try {
       return await next;

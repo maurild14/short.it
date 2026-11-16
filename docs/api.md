@@ -7,7 +7,12 @@ All routes are same-origin under `/api`. JSON errors have `{error:string}`. Unkn
 | GET /engines                                     | Available CLI engines, models, effort values, capability caveats |
 | GET /health                                      | Dependency checks                                                |
 | GET /projects                                    | Project array, most recently updated first                       |
-| POST /projects                                   | `{name}` → Project                                               |
+| POST /projects                                   | `{name,folderId?}` → Project; omitted/null folder means unfiled    |
+| DELETE /projects/:id                             | Permanently remove project and its files → 204; busy → 409        |
+| PUT /projects/:id/folder                          | `{folderId:string|null}` → Project; null removes folder assignment |
+| GET /folders                                     | Folder array                                                     |
+| POST /folders                                    | `{name}` → Folder; duplicate names → 409                          |
+| DELETE /folders/:id                              | Remove folder, keep its projects unfiled → 204                   |
 | GET /projects/:id                                | Project                                                          |
 | PUT /projects/:id                                | `{name?,document?,revision?}` → Project                          |
 | POST /projects/:id/assets                        | Multipart `files` (at most 10, 512 MiB each) → Project           |

@@ -17,3 +17,7 @@ These assets were recorded from the real short.it editor for its documentation o
 The recordings use a visible pointer overlay for readability. Fullscreen captures use the app's built-in expanded-preview fallback to stay within the recorder's viewport. Interactions run against the local application and API; chat prompts in the media demo remain drafts. No paid agent turn, reference download or MP4 export was performed for these recordings. The GIFs are silent, loop automatically and link to their full-size files from the main README.
 
 The sample's runtime project and raw recordings are kept out of Git. Only the documentation images and GIFs belong in this directory. Font licenses remain under [`public/fonts/`](../public/fonts/).
+
+## Project library
+
+`project-library.png`, `project-folders.png`, `project-move.png`, `project-delete.png`, and `project-library-mobile.png` show the project menu, folder navigation, move dialog, deletion confirmation, and narrow layout. These are unmodified Chromium screenshots of the local application using six synthetic text-only projects in an isolated workspace. No personal projects, external media, or assistant conversations are included.

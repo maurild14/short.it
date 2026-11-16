@@ -1,0 +1,132 @@
+.dashboard-sidebar .folder-navigation {
+  padding: 24px 14px;
+  min-height: 0;
+  overflow-y: auto;
+}
+.folder-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 4px 10px 13px;
+  color: #9999aa;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+}
+.folder-navigation .sidebar-item > span:not(.sidebar-count) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-navigation > p {
+  color: #9999aa;
+  font-size: 10px;
+  line-height: 1.7;
+  padding: 0 13px;
+}
+.project-tile {
+  position: relative;
+  min-width: 0;
+}
+.project-tile .project-card {
+  width: 100%;
+}
+.project-tile .project-card-info {
+  padding-right: 35px;
+}
+.project-actions {
+  position: absolute;
+  bottom: 6px;
+  right: 0;
+}
+.project-actions > .icon-button {
+  width: 32px;
+  height: 32px;
+}
+.project-action-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  width: 180px;
+  padding: 5px;
+  background: #202024;
+  border: 1px solid #38383e;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px #0006;
+  z-index: 5;
+}
+.project-action-list button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  background: transparent;
+  border-radius: 4px;
+  font-size: 11px;
+  text-align: left;
+}
+.project-action-list button:hover {
+  background: #ffffff0a;
+}
+.project-action-list .delete-action {
+  color: #ffaaaa;
+}
+.folder-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.folder-path span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-path svg {
+  flex-shrink: 0;
+}
+.dashboard-topbar > span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.select-wrap.folder-filter {
+  display: none;
+}
+.projects-heading h2 {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 800px) {
+  .dashboard-sidebar .folder-navigation {
+    padding: 18px 9px;
+  }
+  .folder-heading {
+    margin: 0 0 8px;
+    justify-content: center;
+  }
+  .folder-heading > span,
+  .folder-navigation > p {
+    display: none;
+  }
+  .folder-navigation .sidebar-item {
+    display: none;
+  }
+  .select-wrap.folder-filter {
+    display: inline-flex;
+    max-width: 100%;
+  }
+  .folder-filter select {
+    max-width: 160px;
+  }
+  .project-filters {
+    flex-wrap: wrap;
+  }
+  .folder-path {
+    max-width: 130px;
+  }
+  .project-actions > .icon-button {
+    min-height: 36px;
+    min-width: 36px;
+  }
+}

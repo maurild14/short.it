@@ -62,15 +62,22 @@ export function Dialog({
   const titleId = useId();
   useEffect(() => {
     const dialog = ref.current!;
+    const previousFocus = document.activeElement as HTMLElement | null;
     dialog.showModal();
-    return () => dialog.close();
+    return () => {
+      dialog.close();
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
   }, []);
   return (
     <dialog
       ref={ref}
       className={`dialog ${className}`}
       aria-labelledby={titleId}
-      onCancel={onClose}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
       onClick={(e) => {
         if (e.target === ref.current) {
           const r = ref.current.getBoundingClientRect();

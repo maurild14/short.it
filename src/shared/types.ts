@@ -74,6 +74,7 @@ export type ChatMessage = {
 export type Project = {
   id: string;
   name: string;
+  folderId?: string;
   createdAt: string;
   updatedAt: string;
   revision: number;
@@ -83,6 +84,7 @@ export type Project = {
   document: VideoDocument;
   sessions?: Partial<Record<"codex" | "claude", string>>;
 };
+export type ProjectFolder = { id: string; name: string };
 export type Job = {
   id: string;
   projectId: string;

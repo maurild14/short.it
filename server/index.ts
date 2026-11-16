@@ -63,6 +63,7 @@ const jobs = new Map<string, Job>();
 const exportPaths = new Map<string, string>();
 const running = new Map<string, AbortController>();
 const importing = new Set<string>();
+const deleting = new Set<string>();
 let shuttingDown = false;
 const chatStates = new Map<
   string,
@@ -94,12 +95,17 @@ const upload = multer({
 });
 const projectName = z.string().trim().min(1).max(100);
 function requireIdle(id: string) {
+  requireAvailable(id);
   if (shuttingDown) throw new HttpError(503, "The server is shutting down.");
   if (running.has(id) || importing.has(id))
     throw new HttpError(
       409,
       "Wait for the current operation to finish or stop the agent before editing.",
     );
+}
+function requireAvailable(id: string) {
+  if (deleting.has(id))
+    throw new HttpError(409, "This project is being deleted.");
 }
 function message(error: unknown) {
   if (error instanceof z.ZodError)
@@ -128,9 +134,61 @@ app.get("/api/health", async (_req, res) =>
   res.json({ ok: true, dependencies: await probeMediaDependencies() }),
 );
 app.get("/api/projects", async (_req, res) => res.json(await store.list()));
-app.post("/api/projects", async (req, res) =>
-  res.status(201).json(await store.create(projectName.parse(req.body.name))),
+app.get("/api/folders", async (_req, res) => res.json(await store.folders()));
+app.post("/api/folders", async (req, res) =>
+  res
+    .status(201)
+    .json(await store.createFolder(projectName.parse(req.body.name))),
 );
+app.delete("/api/folders/:id", async (req, res) => {
+  await store.removeFolder(req.params.id);
+  res.status(204).end();
+});
+app.put("/api/projects/:id/folder", async (req, res) => {
+  const { folderId } = z
+    .object({ folderId: z.string().uuid().nullable() })
+    .strict()
+    .parse(req.body);
+  requireAvailable(req.params.id);
+  res.json(await store.move(req.params.id, folderId));
+});
+app.delete("/api/projects/:id", async (req, res) => {
+  const id = safeId(req.params.id);
+  requireIdle(id);
+  if (
+    [...jobs.values()].some(
+      (job) =>
+        job.projectId === id && ["queued", "running"].includes(job.status),
+    )
+  )
+    throw new HttpError(
+      409,
+      "Wait for the current operation to finish before deleting this project.",
+    );
+  deleting.add(id);
+  try {
+    await store.remove(id);
+    chatStates.delete(id);
+    for (const [jobId, job] of jobs) {
+      if (job.projectId === id) {
+        jobs.delete(jobId);
+        exportPaths.delete(jobId);
+      }
+    }
+    res.status(204).end();
+  } finally {
+    deleting.delete(id);
+  }
+});
+app.post("/api/projects", async (req, res) => {
+  const body = z
+    .object({
+      name: projectName,
+      folderId: z.string().uuid().nullable().optional(),
+    })
+    .parse(req.body);
+  res.status(201).json(await store.create(body.name, body.folderId));
+});
 app.get("/api/projects/:id", async (req, res) =>
   res.json(await store.read(req.params.id)),
 );
@@ -294,6 +352,7 @@ app.post("/api/projects/:id/references", async (req, res) => {
   );
   const referenceId = randomUUID();
   const project = await store.update(id, (p) => {
+    requireAvailable(id);
     if (p.references.length >= 5)
       throw new HttpError(400, "Each project can have up to five references");
     if (p.references.some((r) => r.url === url))
@@ -341,6 +400,7 @@ app.post(
     if (ref.status !== "error")
       throw new HttpError(409, "Only failed references can be retried");
     await store.update(p.id, (p) => {
+      requireAvailable(p.id);
       const r = p.references.find((r) => r.id === ref.id)!;
       r.status = "queued";
       delete r.error;
@@ -358,6 +418,7 @@ app.get("/api/jobs/:id", (req, res) => {
 app.post("/api/projects/:id/export", async (req, res) => {
   requireIdle(req.params.id);
   const p = await store.read(req.params.id);
+  requireIdle(p.id);
   if (!p.document.layers.length)
     throw new HttpError(400, "Add something to the video before exporting");
   if (

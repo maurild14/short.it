@@ -193,6 +193,7 @@ test(
             (await request(route, "PUT", { name: "Blocked" })).status,
             409,
           );
+          assert.equal((await request(route, "DELETE")).status, 409);
           await request(`${route}/cancel`, "POST", {});
           await responses.find((r) => r.status === 200)!.text();
           assert.equal(
@@ -340,6 +341,96 @@ test(
               await readFile(path.join(directory, "project.json"), "utf8"),
             ).name,
             before.name,
+          );
+        },
+      );
+
+      await t.test(
+        "folders and deletion validate input and preserve unrelated projects",
+        async () => {
+          assert.equal(
+            (await request("/api/folders", "POST", { name: " " })).status,
+            400,
+          );
+          const folderResponse = await request("/api/folders", "POST", {
+            name: "Campaign",
+          });
+          assert.equal(folderResponse.status, 201);
+          const folder = await folderResponse.json();
+          assert.equal(
+            (await request("/api/folders", "POST", { name: "campaign" }))
+              .status,
+            409,
+          );
+          const fresh = await request("/api/projects", "POST", {
+            name: "Organize me",
+            folderId: folder.id,
+          });
+          assert.equal(fresh.status, 201);
+          const item: Project = await fresh.json();
+          const itemRoute = `/api/projects/${item.id}`;
+          assert.equal(item.folderId, folder.id);
+          assert.equal(
+            (
+              await request(`${itemRoute}/folder`, "PUT", {
+                folderId: "../invalid",
+              })
+            ).status,
+            400,
+          );
+          assert.equal(
+            (
+              await request(`${itemRoute}/folder`, "PUT", {
+                folderId: "12345678-1234-4234-8234-123456789abc",
+              })
+            ).status,
+            404,
+          );
+          assert.equal(
+            (await request(`${itemRoute}/folder`, "PUT", { folderId: null }))
+              .status,
+            200,
+          );
+          assert.equal(
+            (await (await request(itemRoute)).json()).folderId,
+            undefined,
+          );
+          assert.equal(
+            (
+              await request(`${itemRoute}/folder`, "PUT", {
+                folderId: folder.id,
+              })
+            ).status,
+            200,
+          );
+          assert.equal(
+            (await request(`/api/folders/${folder.id}`, "DELETE")).status,
+            204,
+          );
+          const kept = await (await request(itemRoute)).json();
+          assert.equal(kept.folderId, undefined);
+          assert.deepEqual(kept.document, item.document);
+          const blocked = await fetch(origin + itemRoute, {
+            method: "DELETE",
+            headers: { Origin: "https://example.invalid" },
+          });
+          assert.equal(blocked.status, 403);
+          await mkdir(path.join(workspace, item.id, "exports"));
+          await writeFile(
+            path.join(workspace, item.id, "exports", "test.mp4"),
+            "fixture",
+          );
+          assert.equal((await request(itemRoute, "DELETE")).status, 204);
+          assert.equal((await request(itemRoute)).status, 404);
+          assert.equal((await request(itemRoute, "DELETE")).status, 404);
+          await assert.rejects(
+            readFile(path.join(workspace, item.id, "exports", "test.mp4")),
+          );
+          assert.equal((await request(route)).status, 200);
+          assert.ok(
+            !(await (await request("/api/projects")).json()).some(
+              (p: Project) => p.id === item.id,
+            ),
           );
         },
       );
